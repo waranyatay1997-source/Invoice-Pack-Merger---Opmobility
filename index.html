@@ -52,6 +52,8 @@ input{font:inherit}
 .mode-btn .ico{font-size:18px}
 .mode-btn b{display:block;font-size:14px;line-height:1.2}
 .mode-btn small{color:var(--muted);font-size:11.5px}
+.save-btn{padding:10px 18px;border-radius:12px;border:none;background:var(--teal);color:#fff;font-weight:700;font-size:14px}
+.save-btn:hover{filter:brightness(1.06)}
 .clear-btn{padding:9px 14px;border-radius:12px;border:1px dashed var(--danger);background:transparent;color:var(--danger);font-weight:700;font-size:13.5px}
 .clear-btn:hover{background:rgba(214,69,69,.08)}
 .clear-btn.armed{background:var(--danger);color:#fff;border-style:solid}
@@ -131,10 +133,7 @@ input{font:inherit}
 <main class="wrap">
   <section class="card toolbar">
     <div class="tb-inv" id="tbInv"></div>
-    <div class="tb-modes">
-      <button class="mode-btn" data-act="merge" data-mode="complete"><span class="ico">📦</span><span><b>Complete Set</b><small>รวม 8 ส่วน + Quotation</small></span></button>
-      <button class="mode-btn" data-act="merge" data-mode="vim"><span class="ico">🛂</span><span><b>VIM</b><small>รวม 5 ส่วน + Quotation</small></span></button>
-    </div>
+    <div class="tb-modes"><button class="save-btn" data-act="merge">💾 บันทึก 2 ไฟล์ (Complete + VIM)</button></div>
     <button class="clear-btn" id="clearBtn" data-act="clear">🗑 ล้างทั้งหมดเพื่อเริ่มชุดใหม่</button>
   </section>
 
@@ -177,12 +176,13 @@ const SECTIONS = [
   {key:"goods",   th:"Goods control list"},
   {key:"cipl",    th:"CIPL"},
   {key:"formd",   th:"FORM-D"},
-  {key:"pod",     th:"POD"}
+  {key:"pod",     th:"POD"},
+  {key:"fuel",    th:"Fuel Rate"}
 ];
 const MODES = {
   complete:{ label:"Complete Set", vim:false,
-    keys:["invoice","twb","export","goods","cipl","formd","pod","quotation"],
-    req:["invoice","twb","export","goods","cipl","formd","pod"] },
+    keys:["invoice","twb","export","goods","cipl","formd","pod","fuel","quotation"],
+    req:["invoice","twb","export","goods","cipl","formd","pod","fuel"] },
   vim:{ label:"VIM", vim:true,
     keys:["invoice","twb","export","cipl","quotation"],
     req:["invoice","twb","export","cipl"] }
@@ -297,8 +297,8 @@ function renderAll(){ renderToolbar(); renderSections(); renderQuote(); }
 function updatePreview(){
   const inv = ($("#invNo").value || "").trim() || "XXX";
   const sfx = ($("#invSfx").value || "").trim() || "XXX";
-  const v = pendingMode === "vim" ? "_VIM" : "";
-  $("#fnPreview").textContent = `INVOICE - ${inv}_INV.${sfx}${v}.pdf`;
+  const base = `INVOICE - ${inv}_INV.${sfx}`;
+  $("#fnPreview").innerHTML = `<span>${esc(base)}.pdf</span><br><span>${esc(base)}_VIM.pdf</span>`;
 }
 
 /* ===== Adding files ===== */
@@ -384,39 +384,47 @@ async function buildPdf(keys){
   return out;
 }
 
-function startMerge(mode){
-  const m = MODES[mode];
-  const missing = m.req.filter(k => !files[k].length).map(sectionTh);
-  if (missing.length){ toast("ยังไม่มีไฟล์: " + missing.join(", "), "err"); return; }
-  pendingMode = mode;
-  $("#mSub").textContent = `${m.label} · รวม Quotation ท้ายสุดอัตโนมัติ`;
+function startMerge(){
+  const missing = new Set();
+  for (const mk of ["complete","vim"]) MODES[mk].req.forEach(k => { if (!files[k].length) missing.add(sectionTh(k)); });
+  if (missing.size){ toast("ยังไม่มีไฟล์: " + [...missing].join(", "), "err"); return; }
+  pendingMode = "both";
+  $("#mSub").textContent = "ตั้งชื่อครั้งเดียว ระบบจะบันทึก 2 ไฟล์ให้พร้อมกัน";
   updatePreview();
   $("#modal").hidden = false;
   setTimeout(()=>($("#invSfx").value ? $("#invNo") : $("#invSfx")).focus(), 30);
 }
 function closeModal(){ $("#modal").hidden = true; pendingMode = null; }
 
+function downloadBytes(bytes, name){
+  const url = URL.createObjectURL(new Blob([bytes], {type:"application/pdf"}));
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 8000);
+}
+
 async function confirmSave(){
   if (!pendingMode) return;
-  const mode = pendingMode;
   const inv = ($("#invNo").value || "").trim();
   const sfx = ($("#invSfx").value || "").trim();
   if (!inv){ toast("กรอกเลข Invoice ก่อน", "err"); $("#invNo").focus(); return; }
   if (!sfx){ toast("กรอกส่วน _INV.XXX ก่อน", "err"); $("#invSfx").focus(); return; }
-  let name = `INVOICE - ${inv}_INV.${sfx}${mode === "vim" ? "_VIM" : ""}`;
-  name = name.replace(/[\\/:*?"<>|]/g, "_") + ".pdf";
+  const base = `INVOICE - ${inv}_INV.${sfx}`;
+  const jobs = [
+    { mode:"complete", name: base },
+    { mode:"vim",      name: base + "_VIM" }
+  ].map(j => ({...j, name: j.name.replace(/[\\/:*?"<>|]/g, "_") + ".pdf"}));
   closeModal();
   $("#busy").hidden = false;
   await new Promise(r => setTimeout(r, 40));
   try{
-    const out = await buildPdf(MODES[mode].keys);
-    const bytes = await out.save();
-    const url = URL.createObjectURL(new Blob([bytes], {type:"application/pdf"}));
-    const a = document.createElement("a");
-    a.href = url; a.download = name;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url), 5000);
-    toast(`บันทึกแล้ว: ${name}`);
+    for (const j of jobs){
+      const out = await buildPdf(MODES[j.mode].keys);
+      downloadBytes(await out.save(), j.name);
+      await new Promise(r => setTimeout(r, 500));
+    }
+    toast("บันทึกแล้ว 2 ไฟล์");
   } catch(err){
     toast("รวมไฟล์ไม่สำเร็จ: " + (err.message || err), "err");
   } finally {
@@ -454,7 +462,7 @@ document.addEventListener("click", e => {
     case "toggle": { const it = item(); if (it){ it.open = !it.open; renderSections(); } break; }
     case "rot": { const it = item(); if (it){ it.rot = ((it.rot + Number(t.dataset.d)) % 360 + 360) % 360; renderSections(); } break; }
     case "reset": { const it = item(); if (it){ it.rot = 0; it.fine = 0; renderSections(); } break; }
-    case "merge": startMerge(t.dataset.mode); break;
+    case "merge": startMerge(); break;
     case "clear": clearAll(); break;
     case "pickQuote": $("#quoteInput").click(); break;
     case "resetQuote": quotation = {...DEFAULT_Q, bytes: DEFAULT_Q.bytes.slice(0)}; renderQuote(); toast("คืนใบเสนอราคาเดิมแล้ว"); break;
